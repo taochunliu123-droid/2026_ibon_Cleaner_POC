@@ -62,8 +62,8 @@ export default function VoiceButton({ state, onPress, onRelease, disabled }: Voi
         type="button"
         onClick={handleClick}
         onTouchStart={handleTouchStart}
-        disabled={isThinking || isSpeaking}
-        whileTap={{ scale: 0.92 }}
+        disabled={isThinking || isSpeaking || disabled}
+        whileTap={{ scale: disabled ? 1 : 0.92 }}
         style={{ 
           WebkitTapHighlightColor: 'transparent',
           touchAction: 'manipulation'
@@ -80,9 +80,11 @@ export default function VoiceButton({ state, onPress, onRelease, disabled }: Voi
             ? 'bg-yellow-500 shadow-lg shadow-yellow-500/50'
             : isSpeaking
             ? 'bg-green-500 shadow-lg shadow-green-500/50'
+            : disabled
+            ? 'bg-gray-500/30 cursor-not-allowed'
             : 'bg-white/20 hover:bg-white/30 active:bg-robot-blue active:scale-95'
           }
-          ${(isThinking || isSpeaking) ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'}
+          ${(isThinking || isSpeaking || disabled) ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'}
         `}
       >
         {/* 圖標 */}

@@ -19,16 +19,16 @@ export default function Home() {
   const [currentTranscript, setCurrentTranscript] = useState('')
   const [isWakeWordMode, setIsWakeWordMode] = useState(false)
   const [threadId, setThreadId] = useState<string | null>(null)
+  const [micPermission, setMicPermission] = useState<'granted' | 'denied' | 'prompt'>('prompt')
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   
-  const recognitionRef = useRef<SpeechRecognition | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const chatContainerRef = useRef<HTMLDivElement>(null)
   
-  // 使用 ref 追蹤狀態，避免閉包問題
+  // 使用 ref 追蹤狀態
   const robotStateRef = useRef<RobotState>('idle')
   const isWakeWordModeRef = useRef(false)
   
-  // 同步更新 ref
   useEffect(() => {
     robotStateRef.current = robotState
   }, [robotState])
@@ -37,21 +37,32 @@ export default function Home() {
     isWakeWordModeRef.current = isWakeWordMode
   }, [isWakeWordMode])
 
-  // 初始化語音識別
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-      if (SpeechRecognition) {
-        const recognition = new SpeechRecognition()
-        recognition.continuous = true
-        recognition.interimResults = true
-        recognition.lang = 'zh-TW'
-        recognitionRef.current = recognition
-      }
+  // 檢查瀏覽器支援
+  const checkBrowserSupport = useCallback(() => {
+    if (typeof window === 'undefined') return false
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    return !!SpeechRecognition
+  }, [])
+
+  // 請求麥克風權限
+  const requestMicPermission = useCallback(async () => {
+    try {
+      // 使用 getUserMedia 觸發權限請求
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      // 取得權限後立即停止，只是為了觸發權限
+      stream.getTracks().forEach(track => track.stop())
+      setMicPermission('granted')
+      setErrorMessage(null)
+      return true
+    } catch (error) {
+      console.error('Microphone permission error:', error)
+      setMicPermission('denied')
+      setErrorMessage('請允許麥克風權限才能使用語音功能')
+      return false
     }
   }, [])
 
-  // 自動滾動到最新訊息
+  // 自動滾動
   useEffect(() => {
     if (chatContainerRef.current) {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight
@@ -61,34 +72,27 @@ export default function Home() {
   // 發送訊息給 AI
   const sendToAssistant = useCallback(async (userMessage: string) => {
     setRobotState('thinking')
-    
-    // 添加用戶訊息
     setMessages(prev => [...prev, { role: 'user', content: userMessage }])
 
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          message: userMessage,
-          threadId 
-        })
+        body: JSON.stringify({ message: userMessage, threadId })
       })
 
       if (!response.ok) throw new Error('Chat failed')
 
       const data = await response.json()
       
-      // 保存 thread ID
       if (data.threadId) {
         setThreadId(data.threadId)
       }
 
-      // 添加 AI 回應
       const assistantMessage = data.message
       setMessages(prev => [...prev, { role: 'assistant', content: assistantMessage }])
 
-      // 播放語音
+      // 播放 TTS
       setRobotState('speaking')
       
       const ttsResponse = await fetch('/api/tts', {
@@ -97,175 +101,138 @@ export default function Home() {
         body: JSON.stringify({ text: assistantMessage })
       })
 
-      if (ttsResponse.ok) {
+      if (ttsResponse.ok && audioRef.current) {
         const audioBlob = await ttsResponse.blob()
         const audioUrl = URL.createObjectURL(audioBlob)
-        
-        if (audioRef.current) {
-          audioRef.current.src = audioUrl
-          audioRef.current.onended = () => {
-            setRobotState('idle')
-            URL.revokeObjectURL(audioUrl)
-          }
-          await audioRef.current.play()
+        audioRef.current.src = audioUrl
+        audioRef.current.onended = () => {
+          setRobotState('idle')
+          URL.revokeObjectURL(audioUrl)
         }
+        await audioRef.current.play()
       } else {
         setRobotState('idle')
       }
 
     } catch (error) {
       console.error('Chat error:', error)
-      const errorMsg = '抱歉，我遇到了一些問題，請再試一次。'
-      setMessages(prev => [...prev, { role: 'assistant', content: errorMsg }])
+      setMessages(prev => [...prev, { role: 'assistant', content: '抱歉，我遇到了一些問題，請再試一次。' }])
       setRobotState('idle')
     }
   }, [threadId])
 
-  // 開始按鈕式語音識別
-  const startListening = useCallback(() => {
-    if (!recognitionRef.current || robotStateRef.current !== 'idle') return
+  // 開始語音識別 - iOS 需要在點擊事件中直接創建並啟動
+  const startListening = useCallback(async () => {
+    if (robotStateRef.current !== 'idle') return
+
+    // 檢查瀏覽器支援
+    if (!checkBrowserSupport()) {
+      setErrorMessage('您的瀏覽器不支援語音識別功能')
+      return
+    }
+
+    // 先請求麥克風權限
+    if (micPermission !== 'granted') {
+      const granted = await requestMicPermission()
+      if (!granted) return
+    }
 
     setRobotState('listening')
     setCurrentTranscript('')
+    setErrorMessage(null)
 
-    const recognition = recognitionRef.current
-    
-    recognition.onresult = (event) => {
-      let finalTranscript = ''
-      let interimTranscript = ''
+    try {
+      // 每次都創建新的 SpeechRecognition 實例 (iOS 需要)
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+      const recognition = new SpeechRecognition()
+      
+      // iOS Safari 設定
+      recognition.continuous = false  // iOS 不支援 continuous
+      recognition.interimResults = true
+      recognition.lang = 'zh-TW'
+      recognition.maxAlternatives = 1
 
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript
-        if (event.results[i].isFinal) {
-          finalTranscript += transcript
-        } else {
-          interimTranscript += transcript
+      let finalResult = ''
+
+      recognition.onresult = (event) => {
+        let interimTranscript = ''
+        
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript
+          if (event.results[i].isFinal) {
+            finalResult += transcript
+          } else {
+            interimTranscript += transcript
+          }
+        }
+
+        setCurrentTranscript(interimTranscript || finalResult)
+
+        if (finalResult) {
+          recognition.stop()
         }
       }
 
-      setCurrentTranscript(interimTranscript || finalTranscript)
-
-      if (finalTranscript) {
-        recognition.stop()
-        sendToAssistant(finalTranscript)
-      }
-    }
-
-    recognition.onerror = (event) => {
-      console.error('Speech recognition error:', event.error)
-      setRobotState('idle')
-    }
-
-    recognition.onend = () => {
-      // 使用 ref 檢查狀態
-      if (robotStateRef.current === 'listening') {
+      recognition.onerror = (event) => {
+        console.error('Speech recognition error:', event.error)
+        
+        if (event.error === 'not-allowed') {
+          setErrorMessage('麥克風權限被拒絕，請在瀏覽器設定中允許')
+          setMicPermission('denied')
+        } else if (event.error === 'no-speech') {
+          setErrorMessage('沒有偵測到語音，請再試一次')
+        } else {
+          setErrorMessage(`語音識別錯誤: ${event.error}`)
+        }
+        
         setRobotState('idle')
       }
-    }
 
-    recognition.start()
-  }, [sendToAssistant])
-
-  // 停止語音識別
-  const stopListening = useCallback(() => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop()
-    }
-  }, [])
-
-  // 喚醒詞監聽模式
-  const startWakeWordListening = useCallback(() => {
-    const currentState = robotStateRef.current
-    if (!recognitionRef.current || currentState === 'speaking' || currentState === 'thinking') return
-
-    const recognition = recognitionRef.current
-    recognition.continuous = true
-
-    recognition.onresult = (event) => {
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript.toLowerCase()
-        
-        // 檢測喚醒詞
-        if (transcript.includes('你好') || transcript.includes('哈囉') || transcript.includes('嗨')) {
-          recognition.stop()
-          setIsWakeWordMode(false)
-          
-          // 播放喚醒回應
-          const greeting = '你好！有什麼我可以幫助你的嗎？'
-          setMessages(prev => [...prev, { role: 'assistant', content: greeting }])
-          
-          // 播放 TTS
-          setRobotState('speaking')
-          fetch('/api/tts', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: greeting })
-          }).then(async (res) => {
-            if (res.ok && audioRef.current) {
-              const blob = await res.blob()
-              const url = URL.createObjectURL(blob)
-              audioRef.current.src = url
-              audioRef.current.onended = () => {
-                setRobotState('idle')
-                URL.revokeObjectURL(url)
-              }
-              audioRef.current.play()
-            } else {
-              setRobotState('idle')
-            }
-          }).catch(() => setRobotState('idle'))
-          
-          return
-        }
-
-        // 如果不是喚醒詞但已經在對話中，處理一般訊息
-        if (event.results[i].isFinal && !isWakeWordModeRef.current) {
-          const finalTranscript = event.results[i][0].transcript
-          if (finalTranscript.trim()) {
-            recognition.stop()
-            sendToAssistant(finalTranscript)
+      recognition.onend = () => {
+        if (finalResult.trim()) {
+          sendToAssistant(finalResult.trim())
+        } else {
+          if (robotStateRef.current === 'listening') {
+            setRobotState('idle')
           }
         }
       }
-    }
 
-    recognition.onerror = (event) => {
-      console.error('Wake word error:', event.error)
-      // 5秒後重新開始監聽
-      setTimeout(() => {
-        if (isWakeWordModeRef.current) startWakeWordListening()
-      }, 5000)
-    }
-
-    recognition.onend = () => {
-      // 持續監聽 - 使用 ref 檢查
-      if (isWakeWordModeRef.current && robotStateRef.current === 'idle') {
-        setTimeout(() => startWakeWordListening(), 100)
-      }
-    }
-
-    try {
+      // 直接在用戶手勢中啟動 (iOS 要求)
       recognition.start()
-    } catch (e) {
-      console.error('Failed to start recognition:', e)
-    }
-  }, [sendToAssistant])
 
-  // 切換喚醒詞模式
+    } catch (error) {
+      console.error('Failed to start recognition:', error)
+      setErrorMessage('無法啟動語音識別，請重新整理頁面')
+      setRobotState('idle')
+    }
+  }, [micPermission, checkBrowserSupport, requestMicPermission, sendToAssistant])
+
+  // 停止語音識別
+  const stopListening = useCallback(() => {
+    // 這裡不需要做什麼，因為每次都是新實例
+  }, [])
+
+  // 喚醒詞模式開關
   const toggleWakeWordMode = useCallback(() => {
     if (isWakeWordModeRef.current) {
       setIsWakeWordMode(false)
-      stopListening()
     } else {
       setIsWakeWordMode(true)
-      startWakeWordListening()
+      // iOS 上喚醒詞模式不太實用，給個提示
+      setErrorMessage('iOS 上建議使用按鈕觸發模式')
+      setTimeout(() => setErrorMessage(null), 3000)
     }
-  }, [stopListening, startWakeWordListening])
+  }, [])
+
+  // 手動請求權限按鈕
+  const handleRequestPermission = useCallback(async () => {
+    await requestMicPermission()
+  }, [requestMicPermission])
 
   return (
     <main className="h-screen flex flex-col overflow-hidden">
-      {/* 隱藏的音訊元素 */}
-      <audio ref={audioRef} />
+      <audio ref={audioRef} playsInline />
 
       {/* 頂部狀態列 */}
       <header className="flex-none px-4 py-3 flex items-center justify-between bg-black/20 backdrop-blur-sm">
@@ -279,21 +246,31 @@ export default function Home() {
           </span>
         </div>
         
-        {/* 喚醒詞模式開關 */}
-        <button
-          onClick={toggleWakeWordMode}
-          className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
-            isWakeWordMode 
-              ? 'bg-robot-blue text-black' 
-              : 'bg-white/10 text-gray-300 hover:bg-white/20'
-          }`}
-        >
-          {isWakeWordMode ? '🎤 喚醒詞開啟' : '喚醒詞關閉'}
-        </button>
+        {/* 麥克風權限狀態 */}
+        <div className="flex items-center gap-2">
+          {micPermission === 'denied' && (
+            <button
+              onClick={handleRequestPermission}
+              className="px-2 py-1 bg-red-500/20 text-red-400 text-xs rounded-full"
+            >
+              🔇 重新授權
+            </button>
+          )}
+          {micPermission === 'granted' && (
+            <span className="text-xs text-green-400">🎤 已授權</span>
+          )}
+        </div>
       </header>
 
+      {/* 錯誤訊息 */}
+      {errorMessage && (
+        <div className="mx-4 mt-2 p-3 bg-red-500/20 border border-red-500/30 rounded-lg text-red-300 text-sm text-center">
+          {errorMessage}
+        </div>
+      )}
+
       {/* 機器人動畫區 */}
-      <section className="flex-none h-[35vh] flex items-center justify-center">
+      <section className="flex-none h-[32vh] flex items-center justify-center">
         <RobotAvatar state={robotState} />
       </section>
 
@@ -303,9 +280,18 @@ export default function Home() {
         className="flex-1 overflow-y-auto px-4 pb-4 space-y-3"
       >
         {messages.length === 0 && (
-          <div className="text-center text-gray-400 mt-8">
+          <div className="text-center text-gray-400 mt-4">
             <p className="text-lg mb-2">👋 你好！我是智慧客服助理</p>
-            <p className="text-sm">點擊下方麥克風按鈕，或說「你好」開始對話</p>
+            <p className="text-sm mb-4">點擊下方麥克風按鈕開始對話</p>
+            
+            {micPermission === 'prompt' && (
+              <button
+                onClick={handleRequestPermission}
+                className="px-4 py-2 bg-robot-blue/20 text-robot-blue rounded-full text-sm hover:bg-robot-blue/30 transition-colors"
+              >
+                🎤 點擊授權麥克風
+              </button>
+            )}
           </div>
         )}
         
@@ -317,16 +303,16 @@ export default function Home() {
           />
         ))}
 
-        {/* 即時轉錄顯示 */}
+        {/* 即時轉錄 */}
         {currentTranscript && robotState === 'listening' && (
-          <div className="text-center text-robot-blue/70 text-sm italic">
+          <div className="text-center text-robot-blue/70 text-sm italic py-2">
             &quot;{currentTranscript}&quot;
           </div>
         )}
 
-        {/* 思考中提示 */}
+        {/* 思考中 */}
         {robotState === 'thinking' && (
-          <div className="flex justify-center gap-1">
+          <div className="flex justify-center gap-1 py-2">
             <span className="thinking-dot w-2 h-2 bg-robot-blue rounded-full"></span>
             <span className="thinking-dot w-2 h-2 bg-robot-blue rounded-full"></span>
             <span className="thinking-dot w-2 h-2 bg-robot-blue rounded-full"></span>
@@ -341,12 +327,14 @@ export default function Home() {
             state={robotState}
             onPress={startListening}
             onRelease={stopListening}
-            disabled={robotState !== 'idle'}
+            disabled={robotState !== 'idle' || micPermission === 'denied'}
           />
         </div>
         
         <p className="text-center text-xs text-gray-500 mt-4">
-          {isWakeWordMode ? '說「你好」或「嗨」來喚醒我' : '點擊按鈕開始說話'}
+          {micPermission === 'denied' 
+            ? '請先授權麥克風權限' 
+            : '點擊按鈕開始說話'}
         </p>
       </footer>
     </main>
