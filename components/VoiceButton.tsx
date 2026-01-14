@@ -16,7 +16,6 @@ export default function VoiceButton({ state, onPress, disabled }: VoiceButtonPro
   const isListening = state === 'listening'
   const isThinking = state === 'thinking'
   const isSpeaking = state === 'speaking'
-  const isIdle = state === 'idle'
 
   const handleClick = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.preventDefault()
@@ -27,7 +26,7 @@ export default function VoiceButton({ state, onPress, disabled }: VoiceButtonPro
   }, [disabled, onPress])
 
   return (
-    <div className="relative">
+    <div className="relative flex flex-col items-center">
       {/* 波紋效果 - 錄音時顯示 */}
       {isListening && (
         <>
@@ -48,12 +47,12 @@ export default function VoiceButton({ state, onPress, disabled }: VoiceButtonPro
         }}
         className={`
           relative z-10 select-none
-          w-24 h-24 rounded-full
+          w-20 h-20 rounded-full
           flex items-center justify-center
           transition-all duration-300
           outline-none focus:outline-none
           ${isListening 
-            ? 'bg-red-500 shadow-lg shadow-red-500/50 animate-pulse' 
+            ? 'bg-red-500 shadow-lg shadow-red-500/50' 
             : isThinking
             ? 'bg-yellow-500 shadow-lg shadow-yellow-500/50'
             : isSpeaking
@@ -64,17 +63,29 @@ export default function VoiceButton({ state, onPress, disabled }: VoiceButtonPro
         `}
       >
         {isListening ? (
-          // 錄音中 - 停止圖標
-          <motion.div
-            initial={{ scale: 0.8 }}
-            animate={{ scale: 1 }}
-            className="w-8 h-8 bg-white rounded-md"
-          />
+          // 錄音中 - 動態音波
+          <motion.div className="flex items-end gap-1 h-8">
+            {[1, 2, 3, 4, 5].map((i) => (
+              <motion.div
+                key={i}
+                className="w-1.5 bg-white rounded-full"
+                animate={{
+                  height: [8, 20, 8],
+                }}
+                transition={{
+                  duration: 0.4,
+                  repeat: Infinity,
+                  delay: i * 0.1,
+                  ease: "easeInOut"
+                }}
+              />
+            ))}
+          </motion.div>
         ) : isThinking ? (
           // 思考中 - 旋轉
           <motion.svg
-            width="36"
-            height="36"
+            width="32"
+            height="32"
             viewBox="0 0 24 24"
             animate={{ rotate: 360 }}
             transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
@@ -90,8 +101,8 @@ export default function VoiceButton({ state, onPress, disabled }: VoiceButtonPro
         ) : isSpeaking ? (
           // 說話中 - 音量圖標
           <motion.svg
-            width="36"
-            height="36"
+            width="32"
+            height="32"
             viewBox="0 0 24 24"
             fill="white"
             animate={{ scale: [1, 1.15, 1] }}
@@ -102,8 +113,8 @@ export default function VoiceButton({ state, onPress, disabled }: VoiceButtonPro
         ) : (
           // 待機 - 麥克風
           <svg 
-            width="36" 
-            height="36" 
+            width="32" 
+            height="32" 
             viewBox="0 0 24 24" 
             fill="white"
           >
@@ -113,7 +124,7 @@ export default function VoiceButton({ state, onPress, disabled }: VoiceButtonPro
       </motion.button>
 
       {/* 按鈕標籤 */}
-      <div className="absolute -bottom-10 left-1/2 transform -translate-x-1/2 whitespace-nowrap">
+      <div className="mt-3 whitespace-nowrap">
         <span className={`
           text-sm font-medium px-3 py-1.5 rounded-full
           ${isListening ? 'text-red-400 bg-red-400/10' : 
@@ -121,10 +132,10 @@ export default function VoiceButton({ state, onPress, disabled }: VoiceButtonPro
             isSpeaking ? 'text-green-400 bg-green-400/10' :
             'text-gray-400'}
         `}>
-          {isListening ? '🔴 錄音中...' :
+          {isListening ? '🎤 聆聽中（說完自動停止）' :
            isThinking ? '⏳ 處理中...' :
            isSpeaking ? '🔊 播放中...' :
-           '🎤 點擊錄音'}
+           '點擊開始說話'}
         </span>
       </div>
     </div>
