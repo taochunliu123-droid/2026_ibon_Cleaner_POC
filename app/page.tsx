@@ -23,6 +23,19 @@ export default function Home() {
   const recognitionRef = useRef<SpeechRecognition | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const chatContainerRef = useRef<HTMLDivElement>(null)
+  
+  // 使用 ref 追蹤狀態，避免閉包問題
+  const robotStateRef = useRef<RobotState>('idle')
+  const isWakeWordModeRef = useRef(false)
+  
+  // 同步更新 ref
+  useEffect(() => {
+    robotStateRef.current = robotState
+  }, [robotState])
+  
+  useEffect(() => {
+    isWakeWordModeRef.current = isWakeWordMode
+  }, [isWakeWordMode])
 
   // 初始化語音識別
   useEffect(() => {
@@ -45,42 +58,8 @@ export default function Home() {
     }
   }, [messages])
 
-  // 播放 TTS 語音
-  const playTTS = async (text: string) => {
-    try {
-      setRobotState('speaking')
-      
-      const response = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text })
-      })
-
-      if (!response.ok) throw new Error('TTS failed')
-
-      const audioBlob = await response.blob()
-      const audioUrl = URL.createObjectURL(audioBlob)
-      
-      if (audioRef.current) {
-        audioRef.current.src = audioUrl
-        audioRef.current.onended = () => {
-          setRobotState('idle')
-          URL.revokeObjectURL(audioUrl)
-          // 如果在喚醒詞模式，繼續監聽
-          if (isWakeWordMode) {
-            startWakeWordListening()
-          }
-        }
-        await audioRef.current.play()
-      }
-    } catch (error) {
-      console.error('TTS error:', error)
-      setRobotState('idle')
-    }
-  }
-
   // 發送訊息給 AI
-  const sendToAssistant = async (userMessage: string) => {
+  const sendToAssistant = useCallback(async (userMessage: string) => {
     setRobotState('thinking')
     
     // 添加用戶訊息
@@ -110,19 +89,41 @@ export default function Home() {
       setMessages(prev => [...prev, { role: 'assistant', content: assistantMessage }])
 
       // 播放語音
-      await playTTS(assistantMessage)
+      setRobotState('speaking')
+      
+      const ttsResponse = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: assistantMessage })
+      })
+
+      if (ttsResponse.ok) {
+        const audioBlob = await ttsResponse.blob()
+        const audioUrl = URL.createObjectURL(audioBlob)
+        
+        if (audioRef.current) {
+          audioRef.current.src = audioUrl
+          audioRef.current.onended = () => {
+            setRobotState('idle')
+            URL.revokeObjectURL(audioUrl)
+          }
+          await audioRef.current.play()
+        }
+      } else {
+        setRobotState('idle')
+      }
 
     } catch (error) {
       console.error('Chat error:', error)
       const errorMsg = '抱歉，我遇到了一些問題，請再試一次。'
       setMessages(prev => [...prev, { role: 'assistant', content: errorMsg }])
-      await playTTS(errorMsg)
+      setRobotState('idle')
     }
-  }
+  }, [threadId])
 
   // 開始按鈕式語音識別
   const startListening = useCallback(() => {
-    if (!recognitionRef.current || robotState !== 'idle') return
+    if (!recognitionRef.current || robotStateRef.current !== 'idle') return
 
     setRobotState('listening')
     setCurrentTranscript('')
@@ -156,14 +157,14 @@ export default function Home() {
     }
 
     recognition.onend = () => {
-      if (robotState === 'listening') {
-        // 如果沒有結果就結束
+      // 使用 ref 檢查狀態
+      if (robotStateRef.current === 'listening') {
         setRobotState('idle')
       }
     }
 
     recognition.start()
-  }, [robotState])
+  }, [sendToAssistant])
 
   // 停止語音識別
   const stopListening = useCallback(() => {
@@ -174,7 +175,8 @@ export default function Home() {
 
   // 喚醒詞監聽模式
   const startWakeWordListening = useCallback(() => {
-    if (!recognitionRef.current || robotState === 'speaking' || robotState === 'thinking') return
+    const currentState = robotStateRef.current
+    if (!recognitionRef.current || currentState === 'speaking' || currentState === 'thinking') return
 
     const recognition = recognitionRef.current
     recognition.continuous = true
@@ -191,12 +193,33 @@ export default function Home() {
           // 播放喚醒回應
           const greeting = '你好！有什麼我可以幫助你的嗎？'
           setMessages(prev => [...prev, { role: 'assistant', content: greeting }])
-          playTTS(greeting)
+          
+          // 播放 TTS
+          setRobotState('speaking')
+          fetch('/api/tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: greeting })
+          }).then(async (res) => {
+            if (res.ok && audioRef.current) {
+              const blob = await res.blob()
+              const url = URL.createObjectURL(blob)
+              audioRef.current.src = url
+              audioRef.current.onended = () => {
+                setRobotState('idle')
+                URL.revokeObjectURL(url)
+              }
+              audioRef.current.play()
+            } else {
+              setRobotState('idle')
+            }
+          }).catch(() => setRobotState('idle'))
+          
           return
         }
 
         // 如果不是喚醒詞但已經在對話中，處理一般訊息
-        if (event.results[i].isFinal && !isWakeWordMode) {
+        if (event.results[i].isFinal && !isWakeWordModeRef.current) {
           const finalTranscript = event.results[i][0].transcript
           if (finalTranscript.trim()) {
             recognition.stop()
@@ -210,13 +233,13 @@ export default function Home() {
       console.error('Wake word error:', event.error)
       // 5秒後重新開始監聽
       setTimeout(() => {
-        if (isWakeWordMode) startWakeWordListening()
+        if (isWakeWordModeRef.current) startWakeWordListening()
       }, 5000)
     }
 
     recognition.onend = () => {
-      // 持續監聽
-      if (isWakeWordMode && robotState === 'idle') {
+      // 持續監聽 - 使用 ref 檢查
+      if (isWakeWordModeRef.current && robotStateRef.current === 'idle') {
         setTimeout(() => startWakeWordListening(), 100)
       }
     }
@@ -226,18 +249,18 @@ export default function Home() {
     } catch (e) {
       console.error('Failed to start recognition:', e)
     }
-  }, [robotState, isWakeWordMode])
+  }, [sendToAssistant])
 
   // 切換喚醒詞模式
-  const toggleWakeWordMode = () => {
-    if (isWakeWordMode) {
+  const toggleWakeWordMode = useCallback(() => {
+    if (isWakeWordModeRef.current) {
       setIsWakeWordMode(false)
       stopListening()
     } else {
       setIsWakeWordMode(true)
       startWakeWordListening()
     }
-  }
+  }, [stopListening, startWakeWordListening])
 
   return (
     <main className="h-screen flex flex-col overflow-hidden">
@@ -297,7 +320,7 @@ export default function Home() {
         {/* 即時轉錄顯示 */}
         {currentTranscript && robotState === 'listening' && (
           <div className="text-center text-robot-blue/70 text-sm italic">
-            "{currentTranscript}"
+            &quot;{currentTranscript}&quot;
           </div>
         )}
 
