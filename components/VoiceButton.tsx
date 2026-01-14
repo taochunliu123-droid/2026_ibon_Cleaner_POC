@@ -1,7 +1,7 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { useState, useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 
 type RobotState = 'idle' | 'listening' | 'thinking' | 'speaking'
 
@@ -13,22 +13,38 @@ interface VoiceButtonProps {
 }
 
 export default function VoiceButton({ state, onPress, onRelease, disabled }: VoiceButtonProps) {
-  const [isPressed, setIsPressed] = useState(false)
-
-  const handlePressStart = useCallback(() => {
-    if (disabled) return
-    setIsPressed(true)
-    onPress()
-  }, [disabled, onPress])
-
-  const handlePressEnd = useCallback(() => {
-    setIsPressed(false)
-    // 不立即停止，讓語音識別自然結束
-  }, [])
+  const buttonRef = useRef<HTMLButtonElement>(null)
 
   const isListening = state === 'listening'
   const isThinking = state === 'thinking'
   const isSpeaking = state === 'speaking'
+  const isIdle = state === 'idle'
+
+  // 統一處理點擊/觸控
+  const handleClick = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    
+    if (disabled) return
+    
+    // 如果正在聆聽，停止
+    if (isListening) {
+      onRelease()
+      return
+    }
+    
+    // 如果待機中，開始聆聽
+    if (isIdle) {
+      onPress()
+    }
+  }, [disabled, isListening, isIdle, onPress, onRelease])
+
+  // 觸控開始
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    e.preventDefault() // 防止觸發 mouse 事件
+    if (disabled || !isIdle) return
+    onPress()
+  }, [disabled, isIdle, onPress])
 
   return (
     <div className="relative">
@@ -42,27 +58,31 @@ export default function VoiceButton({ state, onPress, onRelease, disabled }: Voi
       )}
 
       <motion.button
-        onMouseDown={handlePressStart}
-        onMouseUp={handlePressEnd}
-        onMouseLeave={handlePressEnd}
-        onTouchStart={handlePressStart}
-        onTouchEnd={handlePressEnd}
-        disabled={disabled && !isListening}
-        whileTap={{ scale: 0.95 }}
+        ref={buttonRef}
+        type="button"
+        onClick={handleClick}
+        onTouchStart={handleTouchStart}
+        disabled={isThinking || isSpeaking}
+        whileTap={{ scale: 0.92 }}
+        style={{ 
+          WebkitTapHighlightColor: 'transparent',
+          touchAction: 'manipulation'
+        }}
         className={`
-          touch-button floating-button relative z-10
-          w-20 h-20 rounded-full
+          relative z-10 select-none
+          w-24 h-24 rounded-full
           flex items-center justify-center
           transition-all duration-300
+          outline-none focus:outline-none
           ${isListening 
             ? 'bg-robot-blue shadow-lg shadow-robot-blue/50' 
             : isThinking
             ? 'bg-yellow-500 shadow-lg shadow-yellow-500/50'
             : isSpeaking
             ? 'bg-green-500 shadow-lg shadow-green-500/50'
-            : 'bg-white/20 hover:bg-white/30 active:bg-robot-blue'
+            : 'bg-white/20 hover:bg-white/30 active:bg-robot-blue active:scale-95'
           }
-          ${disabled && !isListening ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
+          ${(isThinking || isSpeaking) ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'}
         `}
       >
         {/* 圖標 */}
@@ -70,6 +90,7 @@ export default function VoiceButton({ state, onPress, onRelease, disabled }: Voi
           // 聆聽中 - 音波動畫
           <motion.div 
             className="flex items-end gap-1 h-8"
+            initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
           >
             {[1, 2, 3, 4, 5].map((i) => (
@@ -77,10 +98,10 @@ export default function VoiceButton({ state, onPress, onRelease, disabled }: Voi
                 key={i}
                 className="w-1.5 bg-white rounded-full"
                 animate={{
-                  height: [8, 20 + Math.random() * 12, 8],
+                  height: [8, 24, 8],
                 }}
                 transition={{
-                  duration: 0.4,
+                  duration: 0.5,
                   repeat: Infinity,
                   delay: i * 0.1,
                   ease: "easeInOut"
@@ -91,8 +112,8 @@ export default function VoiceButton({ state, onPress, onRelease, disabled }: Voi
         ) : isThinking ? (
           // 思考中 - 旋轉
           <motion.svg
-            width="32"
-            height="32"
+            width="36"
+            height="36"
             viewBox="0 0 24 24"
             animate={{ rotate: 360 }}
             transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
@@ -108,20 +129,20 @@ export default function VoiceButton({ state, onPress, onRelease, disabled }: Voi
         ) : isSpeaking ? (
           // 說話中 - 音量圖標
           <motion.svg
-            width="32"
-            height="32"
+            width="36"
+            height="36"
             viewBox="0 0 24 24"
             fill="white"
-            animate={{ scale: [1, 1.1, 1] }}
-            transition={{ duration: 0.3, repeat: Infinity }}
+            animate={{ scale: [1, 1.15, 1] }}
+            transition={{ duration: 0.4, repeat: Infinity }}
           >
             <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
           </motion.svg>
         ) : (
           // 待機 - 麥克風
           <svg 
-            width="32" 
-            height="32" 
+            width="36" 
+            height="36" 
             viewBox="0 0 24 24" 
             fill="white"
           >
@@ -131,18 +152,18 @@ export default function VoiceButton({ state, onPress, onRelease, disabled }: Voi
       </motion.button>
 
       {/* 按鈕標籤 */}
-      <div className="absolute -bottom-8 left-1/2 transform -translate-x-1/2 whitespace-nowrap">
+      <div className="absolute -bottom-10 left-1/2 transform -translate-x-1/2 whitespace-nowrap">
         <span className={`
-          text-xs font-medium px-2 py-1 rounded-full
-          ${isListening ? 'text-robot-blue' : 
-            isThinking ? 'text-yellow-400' :
-            isSpeaking ? 'text-green-400' :
+          text-sm font-medium px-3 py-1.5 rounded-full
+          ${isListening ? 'text-robot-blue bg-robot-blue/10' : 
+            isThinking ? 'text-yellow-400 bg-yellow-400/10' :
+            isSpeaking ? 'text-green-400 bg-green-400/10' :
             'text-gray-400'}
         `}>
-          {isListening ? '聆聽中...' :
-           isThinking ? '處理中...' :
-           isSpeaking ? '播放中...' :
-           '按住說話'}
+          {isListening ? '🎤 聆聽中...' :
+           isThinking ? '⏳ 處理中...' :
+           isSpeaking ? '🔊 播放中...' :
+           '點擊說話'}
         </span>
       </div>
     </div>

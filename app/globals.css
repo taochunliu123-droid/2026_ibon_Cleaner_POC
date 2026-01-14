@@ -21,11 +21,20 @@ html, body {
   overflow: hidden;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 body {
   background: linear-gradient(135deg, var(--robot-dark) 0%, #0f0f23 50%, #1a1a2e 100%);
   color: white;
+}
+
+/* 確保按鈕可點擊 */
+button {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* 語音波紋動畫 */

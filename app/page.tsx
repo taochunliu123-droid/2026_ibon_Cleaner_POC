@@ -345,8 +345,8 @@ export default function Home() {
           />
         </div>
         
-        <p className="text-center text-xs text-gray-500 mt-3">
-          {isWakeWordMode ? '說「你好」或「嗨」來喚醒我' : '按住按鈕說話'}
+        <p className="text-center text-xs text-gray-500 mt-4">
+          {isWakeWordMode ? '說「你好」或「嗨」來喚醒我' : '點擊按鈕開始說話'}
         </p>
       </footer>
     </main>
