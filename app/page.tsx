@@ -24,20 +24,31 @@ export default function Home() {
   
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const chatContainerRef = useRef<HTMLDivElement>(null)
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const audioChunksRef = useRef<Blob[]>([])
-  const streamRef = useRef<MediaStream | null>(null)
-  const timerRef = useRef<NodeJS.Timeout | null>(null)
-  const audioContextRef = useRef<AudioContext | null>(null)
-  const analyserRef = useRef<AnalyserNode | null>(null)
-  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null)
-  const lastSoundTimeRef = useRef<number>(Date.now())
   
-  const robotStateRef = useRef<RobotState>('idle')
-  
-  useEffect(() => {
-    robotStateRef.current = robotState
-  }, [robotState])
+  // 錄音相關 - 使用一個 ref 物件來管理所有錄音狀態
+  const recordingRef = useRef<{
+    mediaRecorder: MediaRecorder | null
+    stream: MediaStream | null
+    audioContext: AudioContext | null
+    analyser: AnalyserNode | null
+    source: MediaStreamAudioSourceNode | null
+    chunks: Blob[]
+    timer: NodeJS.Timeout | null
+    silenceTimer: NodeJS.Timeout | null
+    lastSoundTime: number
+    isRecording: boolean
+  }>({
+    mediaRecorder: null,
+    stream: null,
+    audioContext: null,
+    analyser: null,
+    source: null,
+    chunks: [],
+    timer: null,
+    silenceTimer: null,
+    lastSoundTime: Date.now(),
+    isRecording: false
+  })
 
   // 自動滾動
   useEffect(() => {
@@ -46,57 +57,17 @@ export default function Home() {
     }
   }, [messages])
 
-  // 清理
-  useEffect(() => {
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop())
-      }
-      if (timerRef.current) clearInterval(timerRef.current)
-      if (silenceTimerRef.current) clearInterval(silenceTimerRef.current)
-      if (audioContextRef.current) audioContextRef.current.close()
-    }
-  }, [])
-
-  // iOS 音訊解鎖 - 必須在用戶互動時調用
+  // iOS 音訊解鎖
   const unlockAudio = useCallback(() => {
     if (audioUnlocked) return
     
     if (audioRef.current) {
-      // 播放一個靜音來解鎖 iOS 音訊
       audioRef.current.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA/+M4wAAAAAAAAAAAAEluZm8AAAAPAAAAAwAAAbAAqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAbD/OAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
       audioRef.current.play().then(() => {
         setAudioUnlocked(true)
-        console.log('Audio unlocked for iOS')
-      }).catch(e => console.log('Audio unlock failed:', e))
+      }).catch(() => {})
     }
   }, [audioUnlocked])
-
-  // 請求麥克風權限
-  const requestMicPermission = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 16000,
-        } 
-      })
-      streamRef.current = stream
-      setMicPermission('granted')
-      setErrorMessage(null)
-      
-      // 同時解鎖音訊
-      unlockAudio()
-      
-      return stream
-    } catch (error) {
-      console.error('Microphone permission error:', error)
-      setMicPermission('denied')
-      setErrorMessage('請允許麥克風權限才能使用語音功能')
-      return null
-    }
-  }, [unlockAudio])
 
   // 發送訊息給 AI
   const sendToAssistant = useCallback(async (userMessage: string) => {
@@ -140,15 +111,13 @@ export default function Home() {
           URL.revokeObjectURL(audioUrl)
         }
         audioRef.current.onerror = () => {
-          console.error('Audio playback error')
           setRobotState('idle')
         }
         
         try {
           await audioRef.current.play()
         } catch (e) {
-          console.error('Play failed:', e)
-          setErrorMessage('音訊播放失敗，請點擊畫面任意處後再試')
+          setErrorMessage('音訊播放失敗，請點擊畫面後再試')
           setRobotState('idle')
         }
       } else {
@@ -196,75 +165,110 @@ export default function Home() {
     }
   }, [sendToAssistant])
 
-  // 檢測靜音 - 用於自動停止錄音
-  const checkSilence = useCallback(() => {
-    if (!analyserRef.current) return
-
-    const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount)
-    analyserRef.current.getByteFrequencyData(dataArray)
+  // 完全清理錄音資源
+  const cleanupRecording = useCallback(() => {
+    const rec = recordingRef.current
     
-    // 計算音量
-    const average = dataArray.reduce((a, b) => a + b, 0) / dataArray.length
-    
-    if (average > 10) {
-      // 有聲音
-      lastSoundTimeRef.current = Date.now()
-    } else {
-      // 靜音 - 檢查是否超過 1.5 秒
-      const silenceDuration = Date.now() - lastSoundTimeRef.current
-      if (silenceDuration > 1500 && robotStateRef.current === 'listening') {
-        // 自動停止錄音
-        stopListening()
-      }
+    // 清理定時器
+    if (rec.timer) {
+      clearInterval(rec.timer)
+      rec.timer = null
     }
+    if (rec.silenceTimer) {
+      clearInterval(rec.silenceTimer)
+      rec.silenceTimer = null
+    }
+    
+    // 斷開音訊節點
+    if (rec.source) {
+      try { rec.source.disconnect() } catch (e) {}
+      rec.source = null
+    }
+    rec.analyser = null
+    
+    // 關閉 AudioContext
+    if (rec.audioContext && rec.audioContext.state !== 'closed') {
+      try { rec.audioContext.close() } catch (e) {}
+      rec.audioContext = null
+    }
+    
+    // 停止 MediaStream
+    if (rec.stream) {
+      rec.stream.getTracks().forEach(track => {
+        track.stop()
+      })
+      rec.stream = null
+    }
+    
+    rec.mediaRecorder = null
+    rec.chunks = []
+    rec.isRecording = false
   }, [])
 
   // 停止錄音
   const stopListening = useCallback(() => {
-    if (silenceTimerRef.current) {
-      clearInterval(silenceTimerRef.current)
-      silenceTimerRef.current = null
+    const rec = recordingRef.current
+    
+    if (rec.timer) {
+      clearInterval(rec.timer)
+      rec.timer = null
     }
-    if (timerRef.current) {
-      clearInterval(timerRef.current)
-      timerRef.current = null
+    if (rec.silenceTimer) {
+      clearInterval(rec.silenceTimer)
+      rec.silenceTimer = null
     }
     
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      mediaRecorderRef.current.stop()
+    if (rec.mediaRecorder && rec.mediaRecorder.state === 'recording') {
+      rec.isRecording = false
+      rec.mediaRecorder.stop()
+    } else {
+      // 如果沒有在錄音，直接重置狀態
+      cleanupRecording()
+      setRobotState('idle')
     }
-  }, [])
+  }, [cleanupRecording])
 
   // 開始錄音
   const startListening = useCallback(async () => {
-    if (robotStateRef.current !== 'idle') return
-
-    setErrorMessage(null)
+    // 先完全清理之前的錄音
+    cleanupRecording()
     
-    // 解鎖音訊
+    setErrorMessage(null)
     unlockAudio()
 
-    // 取得或請求麥克風權限
-    let stream = streamRef.current
-    if (!stream || !stream.active) {
-      stream = await requestMicPermission()
-      if (!stream) return
-    }
+    const rec = recordingRef.current
 
     try {
-      audioChunksRef.current = []
+      // 獲取新的 MediaStream
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+        } 
+      })
+      
+      rec.stream = stream
+      setMicPermission('granted')
+      
+      // 重置錄音數據
+      rec.chunks = []
+      rec.lastSoundTime = Date.now()
       setRecordingTime(0)
-      lastSoundTimeRef.current = Date.now()
 
-      // 設置音訊分析器用於靜音檢測
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
+      // 創建新的 AudioContext
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
+      rec.audioContext = new AudioContextClass()
+      
+      // 確保 AudioContext 在運行
+      if (rec.audioContext.state === 'suspended') {
+        await rec.audioContext.resume()
       }
       
-      const source = audioContextRef.current.createMediaStreamSource(stream)
-      analyserRef.current = audioContextRef.current.createAnalyser()
-      analyserRef.current.fftSize = 256
-      source.connect(analyserRef.current)
+      // 創建音訊分析器
+      rec.source = rec.audioContext.createMediaStreamSource(stream)
+      rec.analyser = rec.audioContext.createAnalyser()
+      rec.analyser.fftSize = 256
+      rec.source.connect(rec.analyser)
 
       // 決定支援的格式
       let mimeType = 'audio/webm'
@@ -275,26 +279,23 @@ export default function Home() {
       }
 
       const mediaRecorder = new MediaRecorder(stream, { mimeType })
-      mediaRecorderRef.current = mediaRecorder
+      rec.mediaRecorder = mediaRecorder
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data)
+          rec.chunks.push(event.data)
         }
       }
 
       mediaRecorder.onstop = async () => {
-        if (silenceTimerRef.current) {
-          clearInterval(silenceTimerRef.current)
-          silenceTimerRef.current = null
-        }
-        if (timerRef.current) {
-          clearInterval(timerRef.current)
-          timerRef.current = null
-        }
+        const chunks = [...rec.chunks] // 複製一份
+        const currentMimeType = mimeType
+        
+        // 立即清理資源
+        cleanupRecording()
 
-        if (audioChunksRef.current.length > 0) {
-          const audioBlob = new Blob(audioChunksRef.current, { type: mimeType })
+        if (chunks.length > 0) {
+          const audioBlob = new Blob(chunks, { type: currentMimeType })
           
           if (audioBlob.size < 1000) {
             setErrorMessage('錄音時間太短，請說長一點')
@@ -309,16 +310,18 @@ export default function Home() {
       }
 
       mediaRecorder.onerror = () => {
+        cleanupRecording()
         setErrorMessage('錄音發生錯誤')
         setRobotState('idle')
       }
 
       // 開始錄音
       mediaRecorder.start(100)
+      rec.isRecording = true
       setRobotState('listening')
 
       // 計時器
-      timerRef.current = setInterval(() => {
+      rec.timer = setInterval(() => {
         setRecordingTime(prev => {
           if (prev >= 30) {
             stopListening()
@@ -328,32 +331,74 @@ export default function Home() {
         })
       }, 1000)
 
-      // 靜音檢測 - 每 100ms 檢查一次
-      silenceTimerRef.current = setInterval(checkSilence, 100)
+      // 靜音檢測
+      rec.silenceTimer = setInterval(() => {
+        if (!rec.analyser || !rec.isRecording) return
+
+        const dataArray = new Uint8Array(rec.analyser.frequencyBinCount)
+        rec.analyser.getByteFrequencyData(dataArray)
+        
+        const average = dataArray.reduce((a, b) => a + b, 0) / dataArray.length
+        
+        if (average > 10) {
+          rec.lastSoundTime = Date.now()
+        } else {
+          const silenceDuration = Date.now() - rec.lastSoundTime
+          if (silenceDuration > 1500 && rec.isRecording) {
+            stopListening()
+          }
+        }
+      }, 100)
 
     } catch (error) {
       console.error('Failed to start recording:', error)
-      setErrorMessage('無法啟動錄音')
+      cleanupRecording()
+      
+      if ((error as Error).name === 'NotAllowedError') {
+        setMicPermission('denied')
+        setErrorMessage('請允許麥克風權限')
+      } else {
+        setErrorMessage('無法啟動錄音: ' + (error as Error).message)
+      }
       setRobotState('idle')
     }
-  }, [requestMicPermission, transcribeAudio, checkSilence, stopListening, unlockAudio])
+  }, [unlockAudio, transcribeAudio, stopListening, cleanupRecording])
 
   // 處理按鈕點擊
   const handleVoiceButtonPress = useCallback(() => {
-    // 每次點擊都先解鎖音訊
     unlockAudio()
     
-    if (robotStateRef.current === 'listening') {
+    if (robotState === 'listening') {
       stopListening()
-    } else if (robotStateRef.current === 'idle') {
+    } else if (robotState === 'idle') {
       startListening()
     }
-  }, [startListening, stopListening, unlockAudio])
+  }, [robotState, startListening, stopListening, unlockAudio])
 
   // 點擊頁面解鎖音訊
   const handlePageClick = useCallback(() => {
     unlockAudio()
   }, [unlockAudio])
+
+  // 請求權限按鈕
+  const handleRequestPermission = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      stream.getTracks().forEach(track => track.stop())
+      setMicPermission('granted')
+      unlockAudio()
+    } catch (e) {
+      setMicPermission('denied')
+      setErrorMessage('麥克風權限被拒絕')
+    }
+  }, [unlockAudio])
+
+  // 組件卸載時清理
+  useEffect(() => {
+    return () => {
+      cleanupRecording()
+    }
+  }, [cleanupRecording])
 
   return (
     <main className="h-screen flex flex-col overflow-hidden" onClick={handlePageClick}>
@@ -373,7 +418,7 @@ export default function Home() {
         
         <div className="flex items-center gap-2">
           {micPermission === 'granted' && (
-            <span className="text-xs text-green-400">🎤 已授權</span>
+            <span className="text-xs text-green-400">🎤</span>
           )}
           {audioUnlocked && (
             <span className="text-xs text-blue-400">🔊</span>
@@ -411,7 +456,7 @@ export default function Home() {
             
             {micPermission === 'prompt' && (
               <button
-                onClick={requestMicPermission}
+                onClick={handleRequestPermission}
                 className="px-4 py-2 bg-robot-blue/20 text-robot-blue rounded-full text-sm hover:bg-robot-blue/30 transition-colors"
               >
                 🎤 點擊授權麥克風
@@ -451,7 +496,7 @@ export default function Home() {
         
         <p className="text-center text-xs text-gray-500 mt-4">
           {robotState === 'listening' 
-            ? '說完後會自動停止，或點擊按鈕手動停止' 
+            ? '說完後會自動停止' 
             : micPermission === 'denied' 
             ? '請先授權麥克風權限' 
             : '點擊按鈕開始說話'}
