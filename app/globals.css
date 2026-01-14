@@ -1,0 +1,174 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --robot-blue: #00D4FF;
+  --robot-green: #00FF88;
+  --robot-dark: #0a0a1a;
+  --robot-card: #1a1a2e;
+  --robot-border: #2a2a4e;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background: linear-gradient(135deg, var(--robot-dark) 0%, #0f0f23 50%, #1a1a2e 100%);
+  color: white;
+}
+
+/* 語音波紋動畫 */
+@keyframes ripple {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(2.5);
+    opacity: 0;
+  }
+}
+
+.voice-ripple {
+  animation: ripple 1.5s ease-out infinite;
+}
+
+.voice-ripple:nth-child(2) {
+  animation-delay: 0.3s;
+}
+
+.voice-ripple:nth-child(3) {
+  animation-delay: 0.6s;
+}
+
+/* 機器人眼睛閃爍 */
+@keyframes blink {
+  0%, 90%, 100% {
+    transform: scaleY(1);
+  }
+  95% {
+    transform: scaleY(0.1);
+  }
+}
+
+.robot-eye {
+  animation: blink 4s ease-in-out infinite;
+}
+
+/* 說話嘴巴動畫 */
+@keyframes talk {
+  0%, 100% {
+    transform: scaleY(1);
+  }
+  50% {
+    transform: scaleY(0.3);
+  }
+}
+
+.robot-mouth-talking {
+  animation: talk 0.15s ease-in-out infinite;
+}
+
+/* 聆聽狀態 - 耳朵/天線閃爍 */
+@keyframes listening-glow {
+  0%, 100% {
+    box-shadow: 0 0 10px var(--robot-blue);
+  }
+  50% {
+    box-shadow: 0 0 30px var(--robot-blue), 0 0 60px var(--robot-blue);
+  }
+}
+
+.listening-indicator {
+  animation: listening-glow 0.8s ease-in-out infinite;
+}
+
+/* 思考動畫 */
+@keyframes thinking {
+  0%, 100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.thinking-dot {
+  animation: thinking 1.4s ease-in-out infinite;
+}
+
+.thinking-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.thinking-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+/* 對話氣泡 */
+.chat-bubble {
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* 按鈕觸控優化 */
+.touch-button {
+  min-height: 60px;
+  min-width: 60px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 滾動條美化 */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--robot-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--robot-blue);
+}
+
+/* 浮動按鈕效果 */
+.floating-button {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.floating-button:active {
+  transform: scale(0.95);
+}
+
+/* 狀態指示燈 */
+@keyframes status-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(1.2);
+  }
+}
+
+.status-indicator {
+  animation: status-pulse 2s ease-in-out infinite;
+}
