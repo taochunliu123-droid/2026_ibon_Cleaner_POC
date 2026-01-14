@@ -16,51 +16,23 @@ interface Message {
 export default function Home() {
   const [robotState, setRobotState] = useState<RobotState>('idle')
   const [messages, setMessages] = useState<Message[]>([])
-  const [currentTranscript, setCurrentTranscript] = useState('')
-  const [isWakeWordMode, setIsWakeWordMode] = useState(false)
   const [threadId, setThreadId] = useState<string | null>(null)
   const [micPermission, setMicPermission] = useState<'granted' | 'denied' | 'prompt'>('prompt')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [recordingTime, setRecordingTime] = useState(0)
   
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const chatContainerRef = useRef<HTMLDivElement>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
+  const streamRef = useRef<MediaStream | null>(null)
+  const timerRef = useRef<NodeJS.Timeout | null>(null)
   
-  // 使用 ref 追蹤狀態
   const robotStateRef = useRef<RobotState>('idle')
-  const isWakeWordModeRef = useRef(false)
   
   useEffect(() => {
     robotStateRef.current = robotState
   }, [robotState])
-  
-  useEffect(() => {
-    isWakeWordModeRef.current = isWakeWordMode
-  }, [isWakeWordMode])
-
-  // 檢查瀏覽器支援
-  const checkBrowserSupport = useCallback(() => {
-    if (typeof window === 'undefined') return false
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-    return !!SpeechRecognition
-  }, [])
-
-  // 請求麥克風權限
-  const requestMicPermission = useCallback(async () => {
-    try {
-      // 使用 getUserMedia 觸發權限請求
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      // 取得權限後立即停止，只是為了觸發權限
-      stream.getTracks().forEach(track => track.stop())
-      setMicPermission('granted')
-      setErrorMessage(null)
-      return true
-    } catch (error) {
-      console.error('Microphone permission error:', error)
-      setMicPermission('denied')
-      setErrorMessage('請允許麥克風權限才能使用語音功能')
-      return false
-    }
-  }, [])
 
   // 自動滾動
   useEffect(() => {
@@ -68,6 +40,40 @@ export default function Home() {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight
     }
   }, [messages])
+
+  // 清理
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop())
+      }
+      if (timerRef.current) {
+        clearInterval(timerRef.current)
+      }
+    }
+  }, [])
+
+  // 請求麥克風權限
+  const requestMicPermission = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: 16000,
+        } 
+      })
+      streamRef.current = stream
+      setMicPermission('granted')
+      setErrorMessage(null)
+      return stream
+    } catch (error) {
+      console.error('Microphone permission error:', error)
+      setMicPermission('denied')
+      setErrorMessage('請允許麥克風權限才能使用語音功能')
+      return null
+    }
+  }, [])
 
   // 發送訊息給 AI
   const sendToAssistant = useCallback(async (userMessage: string) => {
@@ -121,114 +127,148 @@ export default function Home() {
     }
   }, [threadId])
 
-  // 開始語音識別 - iOS 需要在點擊事件中直接創建並啟動
-  const startListening = useCallback(async () => {
-    if (robotStateRef.current !== 'idle') return
-
-    // 檢查瀏覽器支援
-    if (!checkBrowserSupport()) {
-      setErrorMessage('您的瀏覽器不支援語音識別功能')
-      return
-    }
-
-    // 先請求麥克風權限
-    if (micPermission !== 'granted') {
-      const granted = await requestMicPermission()
-      if (!granted) return
-    }
-
-    setRobotState('listening')
-    setCurrentTranscript('')
-    setErrorMessage(null)
-
+  // 使用 Whisper API 轉錄音訊
+  const transcribeAudio = useCallback(async (audioBlob: Blob) => {
+    setRobotState('thinking')
+    
     try {
-      // 每次都創建新的 SpeechRecognition 實例 (iOS 需要)
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-      const recognition = new SpeechRecognition()
-      
-      // iOS Safari 設定
-      recognition.continuous = false  // iOS 不支援 continuous
-      recognition.interimResults = true
-      recognition.lang = 'zh-TW'
-      recognition.maxAlternatives = 1
+      // 建立 FormData
+      const formData = new FormData()
+      formData.append('audio', audioBlob, 'recording.webm')
 
-      let finalResult = ''
+      const response = await fetch('/api/transcribe', {
+        method: 'POST',
+        body: formData,
+      })
 
-      recognition.onresult = (event) => {
-        let interimTranscript = ''
-        
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript
-          if (event.results[i].isFinal) {
-            finalResult += transcript
-          } else {
-            interimTranscript += transcript
-          }
-        }
-
-        setCurrentTranscript(interimTranscript || finalResult)
-
-        if (finalResult) {
-          recognition.stop()
-        }
+      if (!response.ok) {
+        throw new Error('Transcription failed')
       }
 
-      recognition.onerror = (event) => {
-        console.error('Speech recognition error:', event.error)
-        
-        if (event.error === 'not-allowed') {
-          setErrorMessage('麥克風權限被拒絕，請在瀏覽器設定中允許')
-          setMicPermission('denied')
-        } else if (event.error === 'no-speech') {
-          setErrorMessage('沒有偵測到語音，請再試一次')
-        } else {
-          setErrorMessage(`語音識別錯誤: ${event.error}`)
-        }
-        
+      const data = await response.json()
+      const text = data.text?.trim()
+
+      if (text) {
+        await sendToAssistant(text)
+      } else {
+        setErrorMessage('沒有識別到語音內容，請再試一次')
         setRobotState('idle')
       }
 
-      recognition.onend = () => {
-        if (finalResult.trim()) {
-          sendToAssistant(finalResult.trim())
-        } else {
-          if (robotStateRef.current === 'listening') {
-            setRobotState('idle')
-          }
+    } catch (error) {
+      console.error('Transcription error:', error)
+      setErrorMessage('語音識別失敗，請再試一次')
+      setRobotState('idle')
+    }
+  }, [sendToAssistant])
+
+  // 開始錄音
+  const startListening = useCallback(async () => {
+    if (robotStateRef.current !== 'idle') return
+
+    setErrorMessage(null)
+
+    // 取得或請求麥克風權限
+    let stream = streamRef.current
+    if (!stream || !stream.active) {
+      stream = await requestMicPermission()
+      if (!stream) return
+    }
+
+    try {
+      // 重置錄音數據
+      audioChunksRef.current = []
+      setRecordingTime(0)
+
+      // 決定支援的格式
+      let mimeType = 'audio/webm'
+      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        mimeType = 'audio/webm;codecs=opus'
+      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        mimeType = 'audio/mp4'
+      } else if (MediaRecorder.isTypeSupported('audio/wav')) {
+        mimeType = 'audio/wav'
+      }
+
+      const mediaRecorder = new MediaRecorder(stream, { mimeType })
+      mediaRecorderRef.current = mediaRecorder
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data)
         }
       }
 
-      // 直接在用戶手勢中啟動 (iOS 要求)
-      recognition.start()
+      mediaRecorder.onstop = async () => {
+        if (timerRef.current) {
+          clearInterval(timerRef.current)
+          timerRef.current = null
+        }
+
+        if (audioChunksRef.current.length > 0) {
+          const audioBlob = new Blob(audioChunksRef.current, { type: mimeType })
+          
+          // 檢查錄音長度
+          if (audioBlob.size < 1000) {
+            setErrorMessage('錄音時間太短，請說長一點')
+            setRobotState('idle')
+            return
+          }
+
+          await transcribeAudio(audioBlob)
+        } else {
+          setRobotState('idle')
+        }
+      }
+
+      mediaRecorder.onerror = (event) => {
+        console.error('MediaRecorder error:', event)
+        setErrorMessage('錄音發生錯誤')
+        setRobotState('idle')
+      }
+
+      // 開始錄音
+      mediaRecorder.start(100) // 每 100ms 收集一次數據
+      setRobotState('listening')
+
+      // 計時器
+      timerRef.current = setInterval(() => {
+        setRecordingTime(prev => {
+          // 最長 30 秒自動停止
+          if (prev >= 30) {
+            stopListening()
+            return prev
+          }
+          return prev + 1
+        })
+      }, 1000)
 
     } catch (error) {
-      console.error('Failed to start recognition:', error)
-      setErrorMessage('無法啟動語音識別，請重新整理頁面')
+      console.error('Failed to start recording:', error)
+      setErrorMessage('無法啟動錄音')
       setRobotState('idle')
     }
-  }, [micPermission, checkBrowserSupport, requestMicPermission, sendToAssistant])
+  }, [requestMicPermission, transcribeAudio])
 
-  // 停止語音識別
+  // 停止錄音
   const stopListening = useCallback(() => {
-    // 這裡不需要做什麼，因為每次都是新實例
-  }, [])
-
-  // 喚醒詞模式開關
-  const toggleWakeWordMode = useCallback(() => {
-    if (isWakeWordModeRef.current) {
-      setIsWakeWordMode(false)
-    } else {
-      setIsWakeWordMode(true)
-      // iOS 上喚醒詞模式不太實用，給個提示
-      setErrorMessage('iOS 上建議使用按鈕觸發模式')
-      setTimeout(() => setErrorMessage(null), 3000)
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop()
+    }
+    if (timerRef.current) {
+      clearInterval(timerRef.current)
+      timerRef.current = null
     }
   }, [])
 
-  // 手動請求權限按鈕
-  const handleRequestPermission = useCallback(async () => {
-    await requestMicPermission()
-  }, [requestMicPermission])
+  // 處理按鈕點擊
+  const handleVoiceButtonPress = useCallback(() => {
+    if (robotStateRef.current === 'listening') {
+      stopListening()
+    } else if (robotStateRef.current === 'idle') {
+      startListening()
+    }
+  }, [startListening, stopListening])
 
   return (
     <main className="h-screen flex flex-col overflow-hidden">
@@ -240,32 +280,27 @@ export default function Home() {
           <StatusIndicator state={robotState} />
           <span className="text-sm text-gray-300">
             {robotState === 'idle' && '待機中'}
-            {robotState === 'listening' && '聆聽中...'}
-            {robotState === 'thinking' && '思考中...'}
+            {robotState === 'listening' && `錄音中 ${recordingTime}s`}
+            {robotState === 'thinking' && '處理中...'}
             {robotState === 'speaking' && '回覆中...'}
           </span>
         </div>
         
-        {/* 麥克風權限狀態 */}
-        <div className="flex items-center gap-2">
-          {micPermission === 'denied' && (
-            <button
-              onClick={handleRequestPermission}
-              className="px-2 py-1 bg-red-500/20 text-red-400 text-xs rounded-full"
-            >
-              🔇 重新授權
-            </button>
-          )}
-          {micPermission === 'granted' && (
-            <span className="text-xs text-green-400">🎤 已授權</span>
-          )}
-        </div>
+        {micPermission === 'granted' && (
+          <span className="text-xs text-green-400">🎤 已授權</span>
+        )}
       </header>
 
       {/* 錯誤訊息 */}
       {errorMessage && (
         <div className="mx-4 mt-2 p-3 bg-red-500/20 border border-red-500/30 rounded-lg text-red-300 text-sm text-center">
           {errorMessage}
+          <button 
+            onClick={() => setErrorMessage(null)}
+            className="ml-2 text-red-400 hover:text-red-300"
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -282,11 +317,11 @@ export default function Home() {
         {messages.length === 0 && (
           <div className="text-center text-gray-400 mt-4">
             <p className="text-lg mb-2">👋 你好！我是智慧客服助理</p>
-            <p className="text-sm mb-4">點擊下方麥克風按鈕開始對話</p>
+            <p className="text-sm mb-4">點擊麥克風按鈕開始錄音，再次點擊停止</p>
             
             {micPermission === 'prompt' && (
               <button
-                onClick={handleRequestPermission}
+                onClick={requestMicPermission}
                 className="px-4 py-2 bg-robot-blue/20 text-robot-blue rounded-full text-sm hover:bg-robot-blue/30 transition-colors"
               >
                 🎤 點擊授權麥克風
@@ -303,13 +338,6 @@ export default function Home() {
           />
         ))}
 
-        {/* 即時轉錄 */}
-        {currentTranscript && robotState === 'listening' && (
-          <div className="text-center text-robot-blue/70 text-sm italic py-2">
-            &quot;{currentTranscript}&quot;
-          </div>
-        )}
-
         {/* 思考中 */}
         {robotState === 'thinking' && (
           <div className="flex justify-center gap-1 py-2">
@@ -325,16 +353,18 @@ export default function Home() {
         <div className="flex items-center justify-center gap-4">
           <VoiceButton 
             state={robotState}
-            onPress={startListening}
-            onRelease={stopListening}
-            disabled={robotState !== 'idle' || micPermission === 'denied'}
+            onPress={handleVoiceButtonPress}
+            onRelease={() => {}}
+            disabled={robotState === 'thinking' || robotState === 'speaking'}
           />
         </div>
         
         <p className="text-center text-xs text-gray-500 mt-4">
-          {micPermission === 'denied' 
+          {robotState === 'listening' 
+            ? '點擊按鈕停止錄音' 
+            : micPermission === 'denied' 
             ? '請先授權麥克風權限' 
-            : '點擊按鈕開始說話'}
+            : '點擊按鈕開始錄音'}
         </p>
       </footer>
     </main>

@@ -1,7 +1,7 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { useCallback, useRef } from 'react'
+import { useCallback } from 'react'
 
 type RobotState = 'idle' | 'listening' | 'thinking' | 'speaking'
 
@@ -12,57 +12,35 @@ interface VoiceButtonProps {
   disabled: boolean
 }
 
-export default function VoiceButton({ state, onPress, onRelease, disabled }: VoiceButtonProps) {
-  const buttonRef = useRef<HTMLButtonElement>(null)
-
+export default function VoiceButton({ state, onPress, disabled }: VoiceButtonProps) {
   const isListening = state === 'listening'
   const isThinking = state === 'thinking'
   const isSpeaking = state === 'speaking'
   const isIdle = state === 'idle'
 
-  // 統一處理點擊/觸控
   const handleClick = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.preventDefault()
     e.stopPropagation()
     
     if (disabled) return
-    
-    // 如果正在聆聽，停止
-    if (isListening) {
-      onRelease()
-      return
-    }
-    
-    // 如果待機中，開始聆聽
-    if (isIdle) {
-      onPress()
-    }
-  }, [disabled, isListening, isIdle, onPress, onRelease])
-
-  // 觸控開始
-  const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    e.preventDefault() // 防止觸發 mouse 事件
-    if (disabled || !isIdle) return
     onPress()
-  }, [disabled, isIdle, onPress])
+  }, [disabled, onPress])
 
   return (
     <div className="relative">
-      {/* 波紋效果 - 聆聽時顯示 */}
+      {/* 波紋效果 - 錄音時顯示 */}
       {isListening && (
         <>
-          <span className="voice-ripple absolute inset-0 rounded-full bg-robot-blue/30" />
-          <span className="voice-ripple absolute inset-0 rounded-full bg-robot-blue/30" />
-          <span className="voice-ripple absolute inset-0 rounded-full bg-robot-blue/30" />
+          <span className="voice-ripple absolute inset-0 rounded-full bg-red-500/30" />
+          <span className="voice-ripple absolute inset-0 rounded-full bg-red-500/30" />
+          <span className="voice-ripple absolute inset-0 rounded-full bg-red-500/30" />
         </>
       )}
 
       <motion.button
-        ref={buttonRef}
         type="button"
         onClick={handleClick}
-        onTouchStart={handleTouchStart}
-        disabled={isThinking || isSpeaking || disabled}
+        disabled={disabled}
         whileTap={{ scale: disabled ? 1 : 0.92 }}
         style={{ 
           WebkitTapHighlightColor: 'transparent',
@@ -75,42 +53,23 @@ export default function VoiceButton({ state, onPress, onRelease, disabled }: Voi
           transition-all duration-300
           outline-none focus:outline-none
           ${isListening 
-            ? 'bg-robot-blue shadow-lg shadow-robot-blue/50' 
+            ? 'bg-red-500 shadow-lg shadow-red-500/50 animate-pulse' 
             : isThinking
             ? 'bg-yellow-500 shadow-lg shadow-yellow-500/50'
             : isSpeaking
             ? 'bg-green-500 shadow-lg shadow-green-500/50'
-            : disabled
-            ? 'bg-gray-500/30 cursor-not-allowed'
             : 'bg-white/20 hover:bg-white/30 active:bg-robot-blue active:scale-95'
           }
-          ${(isThinking || isSpeaking || disabled) ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'}
+          ${disabled ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'}
         `}
       >
-        {/* 圖標 */}
         {isListening ? (
-          // 聆聽中 - 音波動畫
-          <motion.div 
-            className="flex items-end gap-1 h-8"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-          >
-            {[1, 2, 3, 4, 5].map((i) => (
-              <motion.div
-                key={i}
-                className="w-1.5 bg-white rounded-full"
-                animate={{
-                  height: [8, 24, 8],
-                }}
-                transition={{
-                  duration: 0.5,
-                  repeat: Infinity,
-                  delay: i * 0.1,
-                  ease: "easeInOut"
-                }}
-              />
-            ))}
-          </motion.div>
+          // 錄音中 - 停止圖標
+          <motion.div
+            initial={{ scale: 0.8 }}
+            animate={{ scale: 1 }}
+            className="w-8 h-8 bg-white rounded-md"
+          />
         ) : isThinking ? (
           // 思考中 - 旋轉
           <motion.svg
@@ -157,15 +116,15 @@ export default function VoiceButton({ state, onPress, onRelease, disabled }: Voi
       <div className="absolute -bottom-10 left-1/2 transform -translate-x-1/2 whitespace-nowrap">
         <span className={`
           text-sm font-medium px-3 py-1.5 rounded-full
-          ${isListening ? 'text-robot-blue bg-robot-blue/10' : 
+          ${isListening ? 'text-red-400 bg-red-400/10' : 
             isThinking ? 'text-yellow-400 bg-yellow-400/10' :
             isSpeaking ? 'text-green-400 bg-green-400/10' :
             'text-gray-400'}
         `}>
-          {isListening ? '🎤 聆聽中...' :
+          {isListening ? '🔴 錄音中...' :
            isThinking ? '⏳ 處理中...' :
            isSpeaking ? '🔊 播放中...' :
-           '點擊說話'}
+           '🎤 點擊錄音'}
         </span>
       </div>
     </div>
